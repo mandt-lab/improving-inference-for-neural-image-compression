@@ -262,27 +262,27 @@ def compress(args):
 
         # save RD evaluation results
         prefix = 'rd'
-        save_file = '%s-%s-file=%s.npz' % (prefix, args.runname, input_file)
+        save_file = '%s-%s-input=%s.npz' % (prefix, args.runname, input_file)
         if script_name != trained_script_name:
-            save_file = '%s-%s-lmbda=%g+%s-file=%s.npz' % (
+            save_file = '%s-%s-lmbda=%g+%s-input=%s.npz' % (
                 prefix, script_name, args.lmbda, args.runname, input_file)
         np.savez(os.path.join(args.results_dir, save_file), **results_dict)
 
         if save_opt_record:
             # save optimization record
             prefix = 'opt'
-            save_file = '%s-%s-file=%s.npz' % (prefix, args.runname, input_file)
+            save_file = '%s-%s-input=%s.npz' % (prefix, args.runname, input_file)
             if script_name != trained_script_name:
-                save_file = '%s-%s-lmbda=%g+%s-file=%s.npz' % (
+                save_file = '%s-%s-lmbda=%g+%s-input=%s.npz' % (
                     prefix, script_name, args.lmbda, args.runname, input_file)
             np.savez(os.path.join(args.results_dir, save_file), **opt_record)
 
         if save_reconstruction:
             assert num_images == 1
             prefix = 'recon'
-            save_file = '%s-%s-file=%s.png' % (prefix, args.runname, input_file)
+            save_file = '%s-%s-input=%s.png' % (prefix, args.runname, input_file)
             if script_name != trained_script_name:
-                save_file = '%s-%s-lmbda=%g-rd_opt_its=%d+%s-file=%s.png' % (
+                save_file = '%s-%s-lmbda=%g-rd_opt_its=%d+%s-input=%s.png' % (
                     prefix, script_name, args.lmbda, rd_opt_its, args.runname, input_file)
             # Write reconstructed image out as a PNG file.
             save_file = os.path.join(args.results_dir, save_file)

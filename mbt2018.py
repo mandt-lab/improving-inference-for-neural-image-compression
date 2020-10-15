@@ -187,7 +187,6 @@ def compress(args):
         # shapes.
         save_dir = os.path.join(args.checkpoint_dir, args.runname)
         latest = tf.train.latest_checkpoint(checkpoint_dir=save_dir)
-        ckpt_last_step = int(os.path.basename(latest).split('.ckpt-')[-1])  # "model.ckpt-1000000" -> 1000000
         tf.train.Saver().restore(sess, save_path=latest)
         eval_fields = ['mse', 'psnr', 'msssim', 'msssim_db', 'est_bpp', 'est_y_bpp', 'est_z_bpp']
         eval_tensors = [mse, psnr, msssim, msssim_db, eval_bpp, y_bpp, z_bpp]
@@ -239,8 +238,8 @@ def compress(args):
 
         input_file = os.path.basename(args.input_file)
         results_dict = all_results_arrs
-        np.savez(os.path.join(args.results_dir, 'rd-%s-last_step=%d-file=%s.npz'
-                              % (args.runname, ckpt_last_step, input_file)), **results_dict)
+        np.savez(os.path.join(args.results_dir, 'rd-%s-file=%s.npz'
+                              % (args.runname, input_file)), **results_dict)
         for field in eval_fields:
             arr = all_results_arrs[field]
             print('Avg {}: {:0.4f}'.format(field, arr.mean()))

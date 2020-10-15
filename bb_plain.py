@@ -209,9 +209,9 @@ def compress(args):
         results_dict = all_results_arrs
         trained_script_name = args.runname.split('-')[0]
         script_name = os.path.splitext(os.path.basename(__file__))[0]  # current script name, without extension
-        save_file = 'rd-%s-file=%s.npz' % (args.runname, input_file)
+        save_file = 'rd-%s-input=%s.npz' % (args.runname, input_file)
         if script_name != trained_script_name:
-            save_file = 'rd-%s+%s-file=%s.npz' % (
+            save_file = 'rd-%s+%s-input=%s.npz' % (
                 script_name, args.runname, input_file)
         np.savez(os.path.join(args.results_dir, save_file), **results_dict)
 

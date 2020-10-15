@@ -258,18 +258,18 @@ def compress(args):
 
         # save RD evaluation results
         prefix = 'rd'
-        save_file = '%s-%s-file=%s.npz' % (prefix, args.runname, input_file)
+        save_file = '%s-%s-input=%s.npz' % (prefix, args.runname, input_file)
         if script_name != trained_script_name:
-            save_file = '%s-%s-lmbda=%g+%s-file=%s.npz' % (
+            save_file = '%s-%s-lmbda=%g+%s-input=%s.npz' % (
                 prefix, script_name, args.lmbda, args.runname, input_file)
         np.savez(os.path.join(args.results_dir, save_file), **results_dict)
 
         if save_opt_record:
             # save optimization record
             prefix = 'opt'
-            save_file = '%s-%s-file=%s.npz' % (prefix, args.runname, input_file)
+            save_file = '%s-%s-input=%s.npz' % (prefix, args.runname, input_file)
             if script_name != trained_script_name:
-                save_file = '%s-%s-lmbda=%g+%s-file=%s.npz' % (
+                save_file = '%s-%s-lmbda=%g+%s-input=%s.npz' % (
                     prefix, script_name, args.lmbda, args.runname, input_file)
             np.savez(os.path.join(args.results_dir, save_file), **opt_record)
 

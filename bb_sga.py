@@ -266,7 +266,7 @@ def compress(args):
                 # axes[1].plot(r_loss_hist)
                 # axes[1].set_ylabel('Rate loss')
                 # axes[1].set_xlabel('SGD iterations')
-                # plt.savefig('plots/local_q_opt_hist-%s-file=%s-b=%d.png' %
+                # plt.savefig('plots/local_q_opt_hist-%s-input=%s-b=%d.png' %
                 #             (args.runname, os.path.basename(args.input_file), batch_idx))
 
                 # If requested, transform the quantized image back and measure performance.
@@ -287,9 +287,9 @@ def compress(args):
         results_dict = all_results_arrs
         trained_script_name = args.runname.split('-')[0]
         script_name = os.path.splitext(os.path.basename(__file__))[0]  # current script name, without extension
-        save_file = 'rd-%s-file=%s.npz' % (args.runname, input_file)
+        save_file = 'rd-%s-input=%s.npz' % (args.runname, input_file)
         if script_name != trained_script_name:
-            save_file = 'rd-%s-lmbda=%g+%s-file=%s.npz' % (
+            save_file = 'rd-%s-lmbda=%g+%s-input=%s.npz' % (
                 script_name, args.lmbda, args.runname, input_file)
         np.savez(os.path.join(args.results_dir, save_file), **results_dict)
 

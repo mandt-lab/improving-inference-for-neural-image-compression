@@ -42,8 +42,8 @@ for lossy bits-back coding;
 * `<num_filters>` is the number of (de)convolutional filters; in the paper we set this to 192 for most of our models following [Minnen et. al, 2018](https://arxiv.org/abs/1809.02736),
  except we found it necessary to increase this to 256 to match the published performance of mean-scale model at higher rate
  (when `lambda=0.04` and `0.08`), following [Ballé et al., 2018](https://arxiv.org/abs/1802.01436);
-* `<train_glob>` is a string of glob pattern like "imgs/*.png" or "imgs/*.npy" (we support `.npy` format to reduce CPU load when training);
-in our experiments we used [CLIC-2018](https://www.compression.cc/2018/challenge/) images;
+* `<train_glob>` is a string of glob pattern like "imgs/*.png" or "imgs/*.npy" (we support float32 `.npy` format to reduce CPU load when training);
+in our experiments we used [CLIC-2018](https://www.compression.cc/2018/challenge/) images (specifically, all the images from [professional_train](https://data.vision.ee.ethz.ch/cvl/clic/professional_train.zip), [professional_valid](https://data.vision.ee.ethz.ch/cvl/clic/professional_valid.zip), [professional_test](https://data.vision.ee.ethz.ch/cvl/clic/test/professional_test.zip), [mobile_valid](https://data.vision.ee.ethz.ch/cvl/clic/mobile_valid.zip), and [mobile_test](https://data.vision.ee.ethz.ch/cvl/clic/test/mobile_test.zip), with no pre-processing);
 * `<lambda>` is the penalty in front of the reconstruction loss and controls the rate-distortion tradeoff; see below section on pre-trained models;
 * `<last_step>` is the total number of training steps; we typically used 2 million steps
  to reproduce the mean-scale (base hyperprior) model results from [Minnen et al., 2018](https://arxiv.org/abs/1809.02736);
