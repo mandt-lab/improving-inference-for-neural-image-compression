@@ -15,6 +15,8 @@ dependencies = [
 name = "ans-coder"
 version = "0.1.0"
 dependencies = [
+ "ndarray",
+ "numpy",
  "pyo3",
  "rand",
  "rand_xoshiro",
@@ -201,6 +203,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndarray"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac06db03ec2f46ee0ecdca1a1c34a99c0d188a0d83439b84bf0cb4b386e4ab09"
+dependencies = [
+ "matrixmultiply",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "rawpointer",
+]
+
+[[package]]
 name = "num-complex"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -239,6 +254,20 @@ checksum = "ac267bcc07f48ee5f8935ab0d24f316fb722d7a1292e2913f0cc196b29ffd611"
 dependencies = [
  "autocfg",
  "libm",
+]
+
+[[package]]
+name = "numpy"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38adbba10b6b4c3c5c3537ef686cd6bc9968c9b5cacc1db4edb2f457256e5300"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "ndarray",
+ "num-complex",
+ "num-traits",
+ "pyo3",
 ]
 
 [[package]]

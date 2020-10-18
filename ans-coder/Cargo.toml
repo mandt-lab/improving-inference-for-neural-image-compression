@@ -8,9 +8,11 @@ version = "0.1.0"
 
 [lib]
 crate-type = ["cdylib"]
-name = "string_sum"
+name = "ans"
 
 [dependencies]
+ndarray = "0.13"
+numpy = "0.12"
 pyo3 = {version = "0.12.3", features = ["extension-module"]}
 statrs = "0.13"
 
