@@ -277,6 +277,17 @@ def compress(args):
                     prefix, script_name, args.lmbda, args.runname, input_file)
             np.savez(os.path.join(args.results_dir, save_file), **opt_record)
 
+        if args.save_latents:
+            prefix = 'latents'
+            save_file = '%s-%s-input=%s.npz' % (prefix, args.runname, input_file)
+            if script_name != trained_script_name:
+                save_file = '%s-%s-lmbda=%g+%s-input=%s.npz' % (
+                    prefix, script_name, args.lmbda, args.runname, input_file)
+            np.savez(
+                os.path.join(args.results_dir, save_file),
+                y_tilde_cur = y_tilde_cur.astype(np.int32),
+                z_tilde_cur = z_tilde_cur.astype(np.int32))
+
         if save_reconstruction:
             assert num_images == 1
             prefix = 'recon'
@@ -295,13 +306,242 @@ def compress(args):
             print('Avg {}: {:0.4f}'.format(field, arr.mean()))
 
 
+def encode_latents(args):
+    """Entropy code latent variables previously generated with `compress --save_latents` and write to a file."""
+    import ans
+    import sys
+
+    # Load the latents
+    latents_file = np.load(args.input_file);
+    y = latents_file['y_tilde_cur']
+    z = latents_file['z_tilde_cur']
+    del latents_file
+
+    # Find range for entropy coding:
+    encoder_ranges = np.array([31, 63, 127, 255])
+    max_z_abs = np.abs(z).max()
+    encoder_z_range_index = np.sum(encoder_ranges < max_z_abs)
+    if encoder_z_range_index == 8:
+        raise "Values for y out of range."
+    encoder_z_range = encoder_ranges[encoder_z_range_index]
+
+    # Instantiate model.
+    hyper_synthesis_transform = HyperSynthesisTransform(args.num_filters, num_output_filters=2 * args.num_filters)
+    entropy_bottleneck = tfc.EntropyBottleneck()
+
+    z_float = z.astype(np.float32)
+    _ = entropy_bottleneck(z_float, training=False)  # dummy call to ensure entropy_bottleneck is properly built
+    mu, sigma = tf.split(hyper_synthesis_transform(z_float), num_or_size_splits=2, axis=-1)
+    sigma = tf.exp(sigma)
+    del z_float
+
+    # Rasterize entropy_bottleneck
+    z_grid = tf.tile(
+        tf.reshape(tf.range(-encoder_z_range, encoder_z_range + 1), (-1, 1, 1, 1)),
+        (1, 1, 1, args.num_filters))
+    z_grid = tf.cast(z_grid, tf.float32)
+    z_grid_likelihood = tf.reshape(entropy_bottleneck._likelihood(z_grid), (2 * encoder_z_range + 1, args.num_filters))
+
+    with tf.Session() as sess:
+        # Load the latest model checkpoint.
+        save_dir = os.path.join(args.checkpoint_dir, args.runname)
+        latest = tf.train.latest_checkpoint(checkpoint_dir=save_dir)
+        tf.train.Saver().restore(sess, save_path=latest)
+
+        # Replace tensorflow ops with their corresponding values.
+        z_grid_likelihood, mu, sigma = sess.run([z_grid_likelihood, mu, sigma])
+
+    output_file = args.output_file
+    if output_file is None:
+        output_file = args.input_file + '.compressed'
+
+    if args.separate:
+        batch_size, _, _, _ = z.shape
+        for i in range(batch_size):
+            encode_tensors(
+                z[i:i+1, ...], y[i:i+1, ...], mu[i:i+1, ...], sigma[i:i+1, ...],
+                '%s.%d' % (output_file, i),
+                z_grid_likelihood, encoder_z_range, sys.byteorder, ans.Coder)
+    else:
+        encode_tensors(
+            z, y, mu, sigma, output_file,
+            z_grid_likelihood, encoder_z_range, sys.byteorder, ans.Coder)
+
+
+def encode_tensors(z, y, mu, sigma, output_file, z_grid_likelihood, z_grid_range, byteorder, Coder):
+    # Find range for entropy coding:
+    encoder_ranges = np.array([31, 63, 127, 255])
+
+    max_z_abs = np.abs(z).max()
+    encoder_z_range_index = np.sum(encoder_ranges < max_z_abs)
+    if encoder_z_range_index == 8:
+        raise "Values for y out of range."
+    encoder_z_range = encoder_ranges[encoder_z_range_index]
+
+    max_y_abs = np.abs(y).max()
+    encoder_y_range_index = np.sum(encoder_ranges < max_y_abs)
+    if encoder_y_range_index == 8:
+        raise "Values for y out of range."
+    encoder_y_range = encoder_ranges[encoder_y_range_index]
+
+    coder = Coder(np.zeros((0,), dtype=np.uint32))
+
+    coder.push_gaussian_symbols(
+        y.ravel().astype(np.int32),
+        -encoder_y_range, encoder_y_range,
+        mu.ravel().astype(np.float64),
+        sigma.ravel().astype(np.float64))
+
+    z_grid_cutoff_left = z_grid_range - encoder_z_range
+    z_grid_cutoff_right = 2 * z_grid_range + 1 - z_grid_cutoff_left
+    _, num_filters = z_grid_likelihood.shape
+    for i in range(num_filters):
+        coder.push_iid_categorical_symbols(
+            z[..., i].flatten().astype(np.int32),
+            -encoder_z_range, encoder_z_range, -encoder_z_range,
+            z_grid_likelihood[z_grid_cutoff_left:z_grid_cutoff_right, i].flatten().astype(np.float64))
+
+    compressed = np.empty((coder.num_words(),), dtype=np.uint32);
+    coder.copy_compressed(compressed)
+    if byteorder == 'big':
+        compressed.byteswap()
+
+    with open(output_file, 'wb') as f:
+        batch_size, z_width, z_height, _ = z.shape
+        assert batch_size != 0 and z_width != 0 and z_height != 0
+
+        batch_size = uint_to_bytes(batch_size)
+        z_width = uint_to_bytes(z_width)
+        z_height = uint_to_bytes(z_height)
+        if len(z_width) > len(z_height):
+            z_height = bytearray([0] * (len(z_width) - len(z_height)) + list(z_height))
+        elif len(z_height) > len(z_width):
+            z_width = bytearray([0] * (len(z_height) - len(z_width)) + list(z_width))
+        
+        # first byte: 2 bits each for length of batch size length, length of dimensions, encoder_z_range_index, encoder_y_range_index
+        first_byte = ((len(batch_size) - 1) << 6) | ((len(z_width) - 1) << 4) | (encoder_z_range_index << 2) | encoder_y_range_index
+        header = bytearray([first_byte] + list(batch_size) + list(z_width) + list(z_height))
+        f.write(header)
+        compressed.tofile(f)
+
+    print('Compressed data written to file %s' % output_file)
+    print('Total file size: %d bits (includes %d bits for header).' % (32 * len(compressed) + 8 * len(header), 8 * len(header)))
+
+
+def decode_latents(args):
+    """Decode compressed latents generated with `encode_latents` and write them to a file."""
+    import ans
+    import sys
+
+    # Read file header and payload.
+    with open(args.input_file, 'rb') as f:
+        # first byte: 2 bits each for length of batch size length, length of dimensions, encoder_z_range_index, encoder_y_range_index
+        first_byte = f.read(1)[0]
+        batch_size_len = (first_byte >> 6) + 1
+        dimensions_len = ((first_byte >> 5) & 3) + 1
+        encoder_z_range_index = (first_byte >> 2) & 3
+        encoder_y_range_index = first_byte & 3
+
+        batch_size = bytes_to_uint(f.read(batch_size_len))
+        z_width = bytes_to_uint(f.read(dimensions_len))
+        z_height = bytes_to_uint(f.read(dimensions_len))
+        y_width = z_width * 4
+        y_height = z_height * 4
+
+        compressed = np.fromfile(f, dtype=np.uint32)
+
+    if sys.byteorder == 'big':
+        compressed.byteswap()
+    coder = ans.Coder(compressed)
+
+    # Find range for entropy coding:
+    encoder_ranges = np.array([31, 63, 127, 255])
+    encoder_z_range = encoder_ranges[encoder_z_range_index]
+    encoder_y_range = encoder_ranges[encoder_y_range_index]
+
+    # Instantiate model.
+    hyper_synthesis_transform = HyperSynthesisTransform(args.num_filters, num_output_filters=2 * args.num_filters)
+    entropy_bottleneck = tfc.EntropyBottleneck()
+
+    z_placeholder = tf.placeholder(np.float32, shape=(batch_size, z_width, z_height, args.num_filters))
+    _ = entropy_bottleneck(z_placeholder, training=False)  # dummy call to ensure entropy_bottleneck is properly built
+    mu, sigma = tf.split(hyper_synthesis_transform(z_placeholder), num_or_size_splits=2, axis=-1)
+    sigma = tf.exp(sigma)
+
+    # Rasterize entropy_bottleneck
+    z_grid = tf.tile(
+        tf.reshape(tf.range(-encoder_z_range, encoder_z_range + 1), (-1, 1, 1, 1)),
+        (1, 1, 1, args.num_filters))
+    z_grid = tf.cast(z_grid, tf.float32)
+    z_grid_likelihood = tf.reshape(entropy_bottleneck._likelihood(z_grid), (2 * encoder_z_range + 1, args.num_filters))
+
+    with tf.Session() as sess:
+        # Load the latest model checkpoint.
+        save_dir = os.path.join(args.checkpoint_dir, args.runname)
+        latest = tf.train.latest_checkpoint(checkpoint_dir=save_dir)
+        tf.train.Saver().restore(sess, save_path=latest)
+
+        z_grid_likelihood = sess.run(z_grid_likelihood)
+
+        z = np.zeros((args.num_filters, batch_size, z_width, z_height), dtype=np.int32)
+        for i in reversed(range(args.num_filters)):
+            coder.pop_iid_categorical_symbols(
+                -encoder_z_range, encoder_z_range, -encoder_z_range,
+                z_grid_likelihood[:, i].flatten().astype(np.float64),
+                z[i, ...].ravel())
+
+        z = z.transpose((1, 2, 3, 0))
+
+        mu, sigma = sess.run([mu, sigma], {z_placeholder: z.astype(np.float32)})
+
+    y = np.empty((batch_size, y_width, y_height, args.num_filters), dtype=np.int32)
+
+    coder.pop_gaussian_symbols(
+        -encoder_y_range, encoder_y_range,
+        mu.ravel().astype(np.float64),
+        sigma.ravel().astype(np.float64),
+        y.ravel())
+
+    assert coder.is_empty()
+        
+    output_file = args.output_file
+    if output_file is None:
+        output_file = args.input_file + '.reconstructed.npz'
+    
+    np.savez(output_file, y_tilde_cur = y, z_tilde_cur = z)
+
+    print('Reconstructed tensors written to file %s' % output_file)
+
+
+def uint_to_bytes(x):
+    """Return a byte string of length 0, 1, 2, 3, or 4 with x in little endian byte order without any leading zero bytes."""
+    result = []
+    while x != 0:
+        result.append(x % 256)
+        x = x // 256
+    assert len(result) <= 4
+    return bytearray(result)
+
+def bytes_to_uint(bytes):
+    """Parse a little endian encoded unsigned int."""
+    result = 0
+    for b in reversed(bytes):
+        result = result * 256 | b
+    return result
+
 from tf_boilerplate import parse_args
 
 
 def main(args):
     # Invoke subcommand.
-    assert args.command == "compress", 'Only compression is supported.'
-    compress(args)
+    if args.command == "compress":
+        compress(args)
+    elif args.command == "encode_latents":
+        encode_latents(args)
+    elif args.command == "decode_latents":
+        decode_latents(args)
+    else:
+        raise 'Only compression and encoding is supported.'
 
 
 if __name__ == "__main__":

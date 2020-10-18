@@ -174,6 +174,10 @@ def parse_args(argv):
     compress_cmd.add_argument(
         "--t0", type=int, default=700,
         help="Number of 'soft-quantization' optimization iterations before annealing in SGA.")
+    compress_cmd.add_argument(
+        "--save_latents", action="store_true",
+        help="Save the optimized latent variables (or variational parameters) to a `.npz` file.")
+
 
     # 'decompress' subcommand.
     decompress_cmd = subparsers.add_parser(
@@ -182,8 +186,24 @@ def parse_args(argv):
         description="Reads a TFCI file, reconstructs the image, and writes back "
                     "a PNG file.")
 
-    # Arguments for both 'compress' and 'decompress'.
-    for cmd, ext in ((compress_cmd, ".tfci"), (decompress_cmd, ".png")):
+    # 'encode_latents' subcommand.
+    encode_latents_cmd = subparsers.add_parser(
+        "encode_latents",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="Entropy code latent variables previously generated with `compress --save_latents` and write to a file.")
+    encode_latents_cmd.add_argument(
+        "--separate", action="store_true",
+        help="Compress each batch item into an independent file.")
+
+    # 'decode_latents' subcommand.
+    decode_latents_cmd = subparsers.add_parser(
+        "decode_latents",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="Decode latent variables previously encoded with `encode_latents`.")
+
+
+    # Arguments for 'compress', 'decompress', 'encode_latents', and 'decode_latents'.
+    for cmd, ext in ((compress_cmd, ".tfci"), (decompress_cmd, ".png"), (encode_latents_cmd, ".compressed"), (decode_latents_cmd, ".reconstructed.npz")):
         cmd.add_argument(
             "runname",
             help="Model name identifier constructed from run config, like 'bmshj2018-num_filters=...'"

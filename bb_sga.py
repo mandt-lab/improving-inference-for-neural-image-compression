@@ -293,6 +293,18 @@ def compress(args):
                 script_name, args.lmbda, args.runname, input_file)
         np.savez(os.path.join(args.results_dir, save_file), **results_dict)
 
+        if args.save_latents:
+            prefix = 'latents'
+            save_file = '%s-%s-input=%s.npz' % (prefix, args.runname, input_file)
+            if script_name != trained_script_name:
+                save_file = '%s-%s-lmbda=%g+%s-input=%s.npz' % (
+                    prefix, script_name, args.lmbda, args.runname, input_file)
+            np.savez(
+                os.path.join(args.results_dir, save_file),
+                y_tilde_cur = y_tilde_cur.astype(np.int32),
+                z_mean_cur = z_mean_cur,
+                z_logvar_cur = z_logvar_cur)
+
         for field in eval_fields:
             arr = all_results_arrs[field]
             print('Avg {}: {:0.4f}'.format(field, arr.mean()))
