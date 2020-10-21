@@ -3,7 +3,7 @@ use statrs::distribution::Normal;
 
 pub mod distributions;
 
-use distributions::{Categorical, DiscreteDistribution, LeakyQuantizer};
+use distributions::{Categorical, DiscreteDistribution, Leakiness, Quantizer};
 
 const FREQUENCY_BITS: usize = 24;
 
@@ -19,6 +19,11 @@ impl AnsCoder {
             buf: Vec::new(),
             state: 1 << 32,
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.buf.clear();
+        self.state = 1 << 32;
     }
 
     pub fn with_compressed_data(mut compressed: Vec<u32>) -> Self {
@@ -89,16 +94,26 @@ impl AnsCoder {
         }
     }
 
-    /// Returns the number of bits that would be serialized by [`finish_encoding`]
+    /// Returns the number of compressed bits.
     ///
-    /// This includes the constant overhead of encoding. The returned value is at
-    /// least 64 and a multiple of 32.;
+    /// This includes a constant overhead. The returned value is the number of bits
+    /// that [`finish_encoding`] or [`copy_compressed`] would return if called at
+    /// this point. It is least 64 and a multiple of 32.
     ///
     /// [`finish_encoding`]: #method.finish_encoding
+    /// [`copy_compressed`]: #method.copy_compressed
     pub fn num_bits(&self) -> usize {
         32 * self.num_words()
     }
 
+    /// Returns the number of compressed 32-bit words.
+    ///
+    /// This includes a constant overhead. The returned value is the length of the
+    /// `Vec<u32>` that [`finish_encoding`] or [`copy_compressed`] would return if
+    /// called at this point. It is least 2.
+    ///
+    /// [`finish_encoding`]: #method.finish_encoding
+    /// [`copy_compressed`]: #method.copy_compressed
     pub fn num_words(&self) -> usize {
         self.buf.len() + 2
     }
@@ -107,7 +122,7 @@ impl AnsCoder {
         self.buf.is_empty() && self.state == 1 << 32
     }
 
-    pub fn push_gaussian_symbols(
+    pub fn push_gaussian_symbols<L: Leakiness>(
         &mut self,
         symbols: &[i32],
         min_supported_symbol: i32,
@@ -118,14 +133,14 @@ impl AnsCoder {
         assert_eq!(symbols.len(), means.len());
         assert_eq!(symbols.len(), stds.len());
 
-        let quantizer = LeakyQuantizer::new(min_supported_symbol, max_supported_symbol);
+        let quantizer = Quantizer::<L>::new(min_supported_symbol, max_supported_symbol);
         for ((&symbol, &mean), &std) in symbols.iter().zip(means).zip(stds) {
             let distribution = quantizer.quantize(Normal::new(mean, std).unwrap());
             self.push_symbol(symbol, &distribution)
         }
     }
 
-    pub fn pop_gaussian_symbols(
+    pub fn pop_gaussian_symbols<L: Leakiness>(
         &mut self,
         min_supported_symbol: i32,
         max_supported_symbol: i32,
@@ -137,7 +152,7 @@ impl AnsCoder {
             return Ok(Vec::new());
         }
 
-        let quantizer = LeakyQuantizer::new(min_supported_symbol, max_supported_symbol);
+        let quantizer = Quantizer::<L>::new(min_supported_symbol, max_supported_symbol);
         let mut symbols = Vec::<i32>::with_capacity(means.len());
 
         unsafe {

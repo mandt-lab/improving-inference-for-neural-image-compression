@@ -178,3 +178,19 @@ def annealed_temperature(t, r, ub, lb=1e-8, backend=np, scheme='exp', **kwargs):
         return min(max(tau, lb), ub)
     else:
         return backend.minimum(backend.maximum(tau, lb), ub)
+
+def uint_to_bytes(x):
+    """Return a byte string of length 0, 1, 2, 3, or 4 with x in little endian byte order without any leading zero bytes."""
+    result = []
+    while x != 0:
+        result.append(x % 256)
+        x = x // 256
+    assert len(result) <= 4
+    return bytearray(result)
+
+def bytes_to_uint(bytes):
+    """Parse a little endian encoded unsigned int."""
+    result = 0
+    for b in reversed(bytes):
+        result = result * 256 | b
+    return result

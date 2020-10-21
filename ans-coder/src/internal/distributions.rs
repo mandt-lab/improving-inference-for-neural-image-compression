@@ -1,4 +1,5 @@
 use statrs::distribution::{InverseCDF, Univariate};
+use std::marker::PhantomData;
 
 pub trait DiscreteDistribution<S: Copy> {
     fn left_cumulative_and_probability(&self, symbol: S) -> (u32, u32);
@@ -10,27 +11,56 @@ pub trait DiscreteDistribution<S: Copy> {
 /// Builder for [`LeakilyQuantizedDistribution`]
 ///
 /// [`LeakilyQuantizedDistribution`]: struct.LeakilyQuantizedDistribution.html
-pub struct LeakyQuantizer {
+pub struct Quantizer<L: Leakiness> {
     min_symbol: i32,
     max_symbol: i32,
     scale: f64,
+    phantom: PhantomData<L>,
 }
 
-impl LeakyQuantizer {
+pub type NonLeakyQuantizer = Quantizer<NonLeaky>;
+pub type LeakyQuantizer = Quantizer<Leaky>;
+
+/// This is a hack that can be replaced by a boolean const generic once they're
+/// stable. It should compile away just the same.
+pub trait Leakiness {
+    fn leakiness() -> u32;
+}
+
+pub struct NonLeaky;
+
+impl Leakiness for NonLeaky {
+    #[inline(always)]
+    fn leakiness() -> u32 {
+        0
+    }
+}
+
+pub struct Leaky;
+
+impl Leakiness for Leaky {
+    #[inline(always)]
+    fn leakiness() -> u32 {
+        1
+    }
+}
+
+impl<L: Leakiness> Quantizer<L> {
     pub fn new(min_symbol: i32, max_symbol: i32) -> Self {
         Self {
             min_symbol,
             max_symbol,
             scale: (1u32 << super::FREQUENCY_BITS)
                 .wrapping_sub((max_symbol - min_symbol + 1) as u32) as f64,
+            phantom: PhantomData::<L>,
         }
     }
 
     pub fn quantize<CD: Univariate<f64, f64> + InverseCDF<f64>>(
         &self,
         continuous_distribution: CD,
-    ) -> LeakilyQuantizedDistribution<CD> {
-        LeakilyQuantizedDistribution {
+    ) -> QuantizedDistribution<L, CD> {
+        QuantizedDistribution {
             inner: continuous_distribution,
             quantizer: self,
         }
@@ -41,13 +71,13 @@ impl LeakyQuantizer {
 ///
 /// [ContinuousDistribution]: trait.ContinuousDistribution.html
 /// [DiscreteDistribution]: trait.DiscreteDistribution.html
-pub struct LeakilyQuantizedDistribution<'a, CD: Univariate<f64, f64> + InverseCDF<f64>> {
+pub struct QuantizedDistribution<'a, L: Leakiness, CD: Univariate<f64, f64> + InverseCDF<f64>> {
     inner: CD,
-    quantizer: &'a LeakyQuantizer,
+    quantizer: &'a Quantizer<L>,
 }
 
-impl<'a, CD: Univariate<f64, f64> + InverseCDF<f64>> DiscreteDistribution<i32>
-    for LeakilyQuantizedDistribution<'a, CD>
+impl<'a, L: Leakiness, CD: Univariate<f64, f64> + InverseCDF<f64>> DiscreteDistribution<i32>
+    for QuantizedDistribution<'a, L, CD>
 {
     fn left_cumulative_and_probability(&self, symbol: i32) -> (u32, u32) {
         let min_symbol = self.quantizer.min_symbol;
@@ -55,7 +85,8 @@ impl<'a, CD: Univariate<f64, f64> + InverseCDF<f64>> DiscreteDistribution<i32>
         let scale = self.quantizer.scale;
 
         assert!(symbol >= min_symbol && symbol <= max_symbol);
-        let slack = (symbol - min_symbol) as u32;
+        let leakiness = L::leakiness();
+        let slack = leakiness * (symbol - min_symbol) as u32;
 
         // Round both cumulatives *independently* to fixed point precision.
         let left_sided_cumulative = if symbol == min_symbol {
@@ -73,7 +104,7 @@ impl<'a, CD: Univariate<f64, f64> + InverseCDF<f64>> DiscreteDistribution<i32>
             // rounding down.
             1 << super::FREQUENCY_BITS
         } else {
-            (scale * self.inner.cdf(symbol as f64 + 0.5)) as u32 + slack + 1
+            (scale * self.inner.cdf(symbol as f64 + 0.5)) as u32 + slack + leakiness
         };
 
         (
@@ -86,6 +117,7 @@ impl<'a, CD: Univariate<f64, f64> + InverseCDF<f64>> DiscreteDistribution<i32>
         let min_symbol = self.quantizer.min_symbol;
         let max_symbol = self.quantizer.max_symbol;
         let scale = self.quantizer.scale;
+        let leakiness = L::leakiness();
 
         // Make an initial guess for the inverse of the leaky CDF.
         let mut symbol = self
@@ -103,7 +135,8 @@ impl<'a, CD: Univariate<f64, f64> + InverseCDF<f64>> DiscreteDistribution<i32>
                 symbol = max_symbol;
             }
 
-            (scale * self.inner.cdf(symbol as f64 - 0.5)) as u32 + (symbol - min_symbol) as u32
+            (scale * self.inner.cdf(symbol as f64 - 0.5)) as u32
+                + leakiness * (symbol - min_symbol) as u32
         };
 
         let right_sided_cumulative = if left_sided_cumulative > quantile {
@@ -117,7 +150,7 @@ impl<'a, CD: Univariate<f64, f64> + InverseCDF<f64>> DiscreteDistribution<i32>
                 }
 
                 left_sided_cumulative = (scale * self.inner.cdf(symbol as f64 - 0.5)) as u32
-                    + (symbol - min_symbol) as u32;
+                    + leakiness * (symbol - min_symbol) as u32;
                 if left_sided_cumulative <= quantile {
                     break;
                 } else {
@@ -137,7 +170,7 @@ impl<'a, CD: Univariate<f64, f64> + InverseCDF<f64>> DiscreteDistribution<i32>
                 }
 
                 let right_sided_cumulative = ((scale * self.inner.cdf(symbol as f64 + 0.5)) as u32
-                    + (symbol - min_symbol) as u32)
+                    + leakiness * (symbol - min_symbol) as u32)
                     .wrapping_add(1);
                 if right_sided_cumulative > quantile {
                     break right_sided_cumulative;

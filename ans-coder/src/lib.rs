@@ -3,7 +3,10 @@ use pyo3::prelude::*;
 
 pub mod internal;
 
-use internal::AnsCoder;
+use internal::{
+    distributions::{Leaky, NonLeaky},
+    AnsCoder,
+};
 
 #[pymodule]
 fn ans(_py: Python, m: &PyModule) -> PyResult<()> {
@@ -11,7 +14,9 @@ fn ans(_py: Python, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
-/// Wrapper around `internal::AnsCoder` with a python-compatible API.
+/// Wrapper around [`internal::AnsCoder`] with a python-compatible API.
+///
+/// [`internal::AnsCoder`]: internal/struct.AnsCoder.html
 #[pyclass]
 pub struct Coder {
     inner: AnsCoder,
@@ -29,6 +34,10 @@ impl Coder {
         };
 
         Self { inner }
+    }
+
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 
     pub fn num_bits(&self) -> usize {
@@ -64,14 +73,25 @@ impl Coder {
         max_supported_symbol: i32,
         means: PyReadonlyArray1<f64>,
         stds: PyReadonlyArray1<f64>,
+        leaky: bool,
     ) {
-        self.inner.push_gaussian_symbols(
-            symbols.as_slice().unwrap(),
-            min_supported_symbol,
-            max_supported_symbol,
-            means.as_slice().unwrap(),
-            stds.as_slice().unwrap(),
-        );
+        if leaky {
+            self.inner.push_gaussian_symbols::<Leaky>(
+                symbols.as_slice().unwrap(),
+                min_supported_symbol,
+                max_supported_symbol,
+                means.as_slice().unwrap(),
+                stds.as_slice().unwrap(),
+            );
+        } else {
+            self.inner.push_gaussian_symbols::<NonLeaky>(
+                symbols.as_slice().unwrap(),
+                min_supported_symbol,
+                max_supported_symbol,
+                means.as_slice().unwrap(),
+                stds.as_slice().unwrap(),
+            );
+        }
     }
 
     pub fn pop_gaussian_symbols(
@@ -81,18 +101,29 @@ impl Coder {
         means: PyReadonlyArray1<f64>,
         stds: PyReadonlyArray1<f64>,
         symbols_out: &PyArray1<i32>,
+        leaky: bool,
     ) {
         assert_eq!(means.len(), symbols_out.len());
 
-        let symbols = self
-            .inner
-            .pop_gaussian_symbols(
-                min_supported_symbol,
-                max_supported_symbol,
-                means.as_slice().unwrap(),
-                stds.as_slice().unwrap(),
-            )
-            .unwrap();
+        let symbols = if leaky {
+            self.inner
+                .pop_gaussian_symbols::<Leaky>(
+                    min_supported_symbol,
+                    max_supported_symbol,
+                    means.as_slice().unwrap(),
+                    stds.as_slice().unwrap(),
+                )
+                .unwrap()
+        } else {
+            self.inner
+                .pop_gaussian_symbols::<NonLeaky>(
+                    min_supported_symbol,
+                    max_supported_symbol,
+                    means.as_slice().unwrap(),
+                    stds.as_slice().unwrap(),
+                )
+                .unwrap()
+        };
 
         let symbols_out = symbols_out.as_cell_slice().unwrap();
         for (src, dest) in symbols.into_iter().zip(symbols_out) {

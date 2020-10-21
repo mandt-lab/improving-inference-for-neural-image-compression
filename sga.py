@@ -19,7 +19,7 @@ tf.set_random_seed(seed)
 import tensorflow_compression as tfc
 from nn_models import AnalysisTransform, SynthesisTransform, HyperAnalysisTransform
 from nn_models import MBT2018HyperSynthesisTransform as HyperSynthesisTransform
-from utils import write_png
+from utils import write_png, uint_to_bytes, bytes_to_uint
 
 SCALES_MIN = 0.11
 SCALES_MAX = 256
@@ -321,8 +321,8 @@ def encode_latents(args):
     encoder_ranges = np.array([31, 63, 127, 255])
     max_z_abs = np.abs(z).max()
     encoder_z_range_index = np.sum(encoder_ranges < max_z_abs)
-    if encoder_z_range_index == 8:
-        raise "Values for y out of range."
+    if encoder_z_range_index == len(encoder_ranges):
+        raise "Values for z out of range."
     encoder_z_range = encoder_ranges[encoder_z_range_index]
 
     # Instantiate model.
@@ -358,6 +358,7 @@ def encode_latents(args):
     if args.separate:
         batch_size, _, _, _ = z.shape
         for i in range(batch_size):
+            # TODO: use a single coder that we recycle.
             encode_tensors(
                 z[i:i+1, ...], y[i:i+1, ...], mu[i:i+1, ...], sigma[i:i+1, ...],
                 '%s.%d' % (output_file, i),
@@ -374,13 +375,13 @@ def encode_tensors(z, y, mu, sigma, output_file, z_grid_likelihood, z_grid_range
 
     max_z_abs = np.abs(z).max()
     encoder_z_range_index = np.sum(encoder_ranges < max_z_abs)
-    if encoder_z_range_index == 8:
-        raise "Values for y out of range."
+    if encoder_z_range_index == len(encoder_ranges):
+        raise "Values for z out of range."
     encoder_z_range = encoder_ranges[encoder_z_range_index]
 
     max_y_abs = np.abs(y).max()
     encoder_y_range_index = np.sum(encoder_ranges < max_y_abs)
-    if encoder_y_range_index == 8:
+    if encoder_y_range_index == len(encoder_ranges):
         raise "Values for y out of range."
     encoder_y_range = encoder_ranges[encoder_y_range_index]
 
@@ -390,7 +391,8 @@ def encode_tensors(z, y, mu, sigma, output_file, z_grid_likelihood, z_grid_range
         y.ravel().astype(np.int32),
         -encoder_y_range, encoder_y_range,
         mu.ravel().astype(np.float64),
-        sigma.ravel().astype(np.float64))
+        sigma.ravel().astype(np.float64),
+        True)
 
     z_grid_cutoff_left = z_grid_range - encoder_z_range
     z_grid_cutoff_right = 2 * z_grid_range + 1 - z_grid_cutoff_left
@@ -463,7 +465,7 @@ def decode_latents(args):
     hyper_synthesis_transform = HyperSynthesisTransform(args.num_filters, num_output_filters=2 * args.num_filters)
     entropy_bottleneck = tfc.EntropyBottleneck()
 
-    z_placeholder = tf.placeholder(np.float32, shape=(batch_size, z_width, z_height, args.num_filters))
+    z_placeholder = tf.placeholder(tf.float32, shape=(batch_size, z_width, z_height, args.num_filters))
     _ = entropy_bottleneck(z_placeholder, training=False)  # dummy call to ensure entropy_bottleneck is properly built
     mu, sigma = tf.split(hyper_synthesis_transform(z_placeholder), num_or_size_splits=2, axis=-1)
     sigma = tf.exp(sigma)
@@ -483,13 +485,12 @@ def decode_latents(args):
 
         z_grid_likelihood = sess.run(z_grid_likelihood)
 
-        z = np.zeros((args.num_filters, batch_size, z_width, z_height), dtype=np.int32)
+        z = np.empty((args.num_filters, batch_size, z_width, z_height), dtype=np.int32)
         for i in reversed(range(args.num_filters)):
             coder.pop_iid_categorical_symbols(
                 -encoder_z_range, encoder_z_range, -encoder_z_range,
                 z_grid_likelihood[:, i].flatten().astype(np.float64),
                 z[i, ...].ravel())
-
         z = z.transpose((1, 2, 3, 0))
 
         mu, sigma = sess.run([mu, sigma], {z_placeholder: z.astype(np.float32)})
@@ -500,7 +501,8 @@ def decode_latents(args):
         -encoder_y_range, encoder_y_range,
         mu.ravel().astype(np.float64),
         sigma.ravel().astype(np.float64),
-        y.ravel())
+        y.ravel(),
+        True)
 
     assert coder.is_empty()
         
@@ -512,22 +514,6 @@ def decode_latents(args):
 
     print('Reconstructed tensors written to file %s' % output_file)
 
-
-def uint_to_bytes(x):
-    """Return a byte string of length 0, 1, 2, 3, or 4 with x in little endian byte order without any leading zero bytes."""
-    result = []
-    while x != 0:
-        result.append(x % 256)
-        x = x // 256
-    assert len(result) <= 4
-    return bytearray(result)
-
-def bytes_to_uint(bytes):
-    """Parse a little endian encoded unsigned int."""
-    result = 0
-    for b in reversed(bytes):
-        result = result * 256 | b
-    return result
 
 from tf_boilerplate import parse_args
 
@@ -541,7 +527,7 @@ def main(args):
     elif args.command == "decode_latents":
         decode_latents(args)
     else:
-        raise 'Only compression and encoding is supported.'
+        raise 'Only compression, encoding, and decoding is supported.'
 
 
 if __name__ == "__main__":
