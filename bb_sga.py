@@ -131,6 +131,12 @@ class Model:
         self.train_bpp = tf.reduce_mean(self.eval_bpp)
         self.net_z_bpp = tf.reduce_mean(self.z_bpp - self.bpp_back)
 
+        z_scale_extra_bits = np.log2(Z_DENSITY) * int(np.prod(z_likelihoods.shape.as_list()[1:]))
+        self.bits_back = z_scale_extra_bits - batch_log_q_z_tilde / np.log(2)
+        self.y_bits = -batch_log_cond_p_y_tilde / np.log(2)
+        self.z_bits = z_scale_extra_bits - batch_log_p_z_tilde / np.log(2)
+        self.eval_bits = self.y_bits + self.z_bits - self.bits_back # shape (N,)
+
         # Mean squared error across pixels.
         self.train_mse = tf.reduce_mean(tf.squared_difference(x, x_tilde))
         # Multiply by 255^2 to correct for rescaling.
@@ -391,31 +397,30 @@ def encode_latents(args):
         dataset = tf.data.Dataset.from_tensor_slices(y)
         dataset = dataset.batch(batch_size=eval_batch_size)
         y_next = dataset.make_one_shot_iterator().get_next()
+        y_val = sess.run(y_next)
 
-        while True:
-            try:
-                y_val = sess.run(y_next)
+        y_tilde_cur = y_val.astype(np.float32)
+        rate_feed_dict = {model.y_tilde: y_tilde_cur}
+        np.random.seed(seed)
+        tf.set_random_seed(seed)
+        print('----Rate Optimization----')
+        z_mean_cur, z_logvar_cur = sess.run([model.z_mean_init, model.z_logvar_init], feed_dict={model.y_tilde: y_tilde_cur})
 
-                y_tilde_cur = y_val.astype(np.float32)
-                rate_feed_dict = {model.y_tilde: y_tilde_cur}
-                np.random.seed(seed)
-                tf.set_random_seed(seed)
-                print('----Rate Optimization----')
-                z_mean_cur, z_logvar_cur = sess.run([model.z_mean_init, model.z_logvar_init], feed_dict={model.y_tilde: y_tilde_cur})
+        r_lr = 0.003
+        r_opt_its = 2000
+        from adam import Adam
+        adam_optimizer = Adam(lr=r_lr)
+        for it in range(r_opt_its):
+            grads, obj = sess.run([model.r_gradients, model.net_z_bpp],
+                                    feed_dict={model.z_mean: z_mean_cur, model.z_logvar: z_logvar_cur, **rate_feed_dict})
+            z_mean_cur, z_logvar_cur = adam_optimizer.update([z_mean_cur, z_logvar_cur], grads)
+            if it % 100 == 0 or it + 1 == r_opt_its:
+                print('it=', it, '\trate=', obj)
+        print()
 
-                r_lr = 0.003
-                r_opt_its = 2000
-                from adam import Adam
-                adam_optimizer = Adam(lr=r_lr)
-                for it in range(r_opt_its):
-                    grads, obj = sess.run([model.r_gradients, model.net_z_bpp],
-                                            feed_dict={model.z_mean: z_mean_cur, model.z_logvar: z_logvar_cur, **rate_feed_dict})
-                    z_mean_cur, z_logvar_cur = adam_optimizer.update([z_mean_cur, z_logvar_cur], grads)
-                    if it % 100 == 0 or it + 1 == r_opt_its:
-                        print('it=', it, '\trate=', obj)
-                print()
-            except tf.errors.OutOfRangeError:
-                break
+        est_bits_back, est_y_bits, est_z_bits, est_net_bits = sess.run(
+            [model.bits_back, model.y_bits, model.z_bits, model.eval_bits],
+            feed_dict={model.z_mean: z_mean_cur, model.z_logvar: z_logvar_cur, **rate_feed_dict})
 
         # Find range for entropy coding:
         z_mean_scaled = Z_DENSITY * z_mean_cur
@@ -440,8 +445,7 @@ def encode_latents(args):
             z_std_scaled.ravel().astype(np.float64),
             z.ravel(),
             True)
-
-        min_coder_size = coder.num_bits()
+        num_bits_after_popping_z = coder.num_bits()
 
         fake_y = np.zeros([batch_size] + model.y.shape[1:].as_list(), dtype=np.float32)
         y_mean, y_std = sess.run(
@@ -452,12 +456,16 @@ def encode_latents(args):
                 model.T: 1.0
             })
 
+        # Entropy coder cannot deal with infinite or zero standard deviations.
+        y_std = np.maximum(np.minimum(y_std, 16 * encoder_y_range), 1e-6)
+
         coder.push_gaussian_symbols(
             y.ravel().astype(np.int32),
             -encoder_y_range, encoder_y_range,
             y_mean.ravel().astype(np.float64),
             y_std.ravel().astype(np.float64),
             True)
+        num_bits_after_pushing_y = coder.num_bits()
 
         z_grid_cutoff_left = z_grid_range - encoder_z_range
         z_grid_cutoff_right = 2 * z_grid_range + 1 - z_grid_cutoff_left
@@ -467,6 +475,7 @@ def encode_latents(args):
                 z[..., i].flatten().astype(np.int32),
                 -encoder_z_range, encoder_z_range, -encoder_z_range,
                 z_grid_likelihood[z_grid_cutoff_left:z_grid_cutoff_right, i].flatten().astype(np.float64))
+        num_bits_after_pushing_z = coder.num_bits()
 
         compressed = np.empty((coder.num_words(),), dtype=np.uint32)
         coder.copy_compressed(compressed)
@@ -492,15 +501,23 @@ def encode_latents(args):
             f.write(header)
             compressed.tofile(f)
 
-        full_file_size = 32 * len(compressed) + 8 * len(header)
         print('Compressed data written to file %s' % output_file)
-        print('Started with %d bits of side information.' % side_information_bits)
-        print('Decoded z, leaving about %d bits of side information.' % min_coder_size)
+        print()
+        print('Expected bit rates based on information content:')
+        print('- expected bits back: %.2f bits' % np.sum(est_bits_back))
+        print('- expected bits for encoding y|z: %.2f bits' % np.sum(est_y_bits))
+        print('- expected bits for encoding z: %.2f bits' % np.sum(est_z_bits))
+        print('- expected net file size: %.2f bits' % np.sum(est_net_bits))
+        print()
+        print('Actual bit rates from entropy coder:')
+        print('- started with %d bits of random side information' % side_information_bits)
+        print('- actual bits back: %d bits' % (side_information_bits - num_bits_after_popping_z))
+        print('- actual bits for encoding y|z: %d bits' % (num_bits_after_pushing_y - num_bits_after_popping_z))
+        print('- actual bits for encoding z: %d bits' % (num_bits_after_pushing_z - num_bits_after_pushing_y))
+        print('- header size: %d bits' % (8 * len(header)))
         print(
-            'Then encoded y and z, resulting in %d bits (including %d bits for header)'
-            % (full_file_size, 8 * len(header)))
-        print('Net file size: %d bits (including header).' % (full_file_size - side_information_bits))
-
+            '- actual net file size (including header): %d bits'
+            % (8 * len(header) + num_bits_after_pushing_z - side_information_bits))
 
     with tf.Session() as sess:
         # Load the latest model checkpoint.
@@ -609,6 +626,9 @@ def decode_latents(args):
                 model.T: 1.0
             })
 
+        # Entropy coder cannot deal with infinite or zero standard deviations.
+        y_std = np.maximum(np.minimum(y_std, 16 * encoder_y_range), 1e-6)
+
         y = np.empty(y_mean.shape, dtype=np.int32)
         coder.pop_gaussian_symbols(
             -encoder_y_range, encoder_y_range,
@@ -695,6 +715,3 @@ def main(args):
 
 if __name__ == "__main__":
     app.run(main, flags_parser=parse_args)
-
-# Net file size: 4075681 bits (including header).
-# Avg est_bpp: 0.4284
