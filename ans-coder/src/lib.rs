@@ -1,13 +1,18 @@
+#[cfg(not(debug_assertions))]
 use numpy::{PyArray1, PyReadonlyArray1};
+
+#[cfg(not(debug_assertions))]
 use pyo3::prelude::*;
 
 pub mod internal;
 
+#[cfg(not(debug_assertions))]
 use internal::{
     distributions::{Leaky, NonLeaky},
     AnsCoder,
 };
 
+#[cfg(not(debug_assertions))]
 #[pymodule]
 fn ans(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Coder>()?;
@@ -25,10 +30,10 @@ fn ans(_py: Python, m: &PyModule) -> PyResult<()> {
 /// To retrieve the compressed data that is currently on the stack, first
 /// query for the size of the compressed data using the method `num_words()`,
 /// then allocate a numpy array of this size and dtype `uint32`, and finally
-/// call pass this array to the method `copy_compressed`.
+/// pass this array to the method `copy_compressed`.
 ///
-/// To decompress data, pass the compressed data to the constructor (and then
-/// decompress the symbols in reverse order).
+/// To decompress data, pass the compressed data to the constructor and then
+/// pop off the symbols in reverse order.
 ///
 /// # Constructor
 ///
@@ -39,11 +44,13 @@ fn ans(_py: Python, m: &PyModule) -> PyResult<()> {
 ///     `uint32`. Only needed for decompression. If not supplied or empty then
 ///     the entropy coder will be constructed with the smallest allowed original
 ///     state (64 bits).
+#[cfg(not(debug_assertions))]
 #[pyclass]
 pub struct Coder {
     inner: AnsCoder,
 }
 
+#[cfg(not(debug_assertions))]
 #[pymethods]
 impl Coder {
     /// Constructs a new entropy coder, optionally passing initial compressed data.
@@ -97,18 +104,20 @@ impl Coder {
     ///
     /// Example:
     ///
-    ///     coder = ans.Coder()
-    ///     # ... push some symbols on coder ...
-    ///     compressed_len = coder.num_words()
-    ///     compressed = np.empty((compressed_len,), dtype=np.uint32)
-    ///     coder.copy_compressed(compressed)
+    /// ```python
+    /// coder = ans.Coder()
+    /// # ... push some symbols on coder ...
+    /// compressed_len = coder.num_words()
+    /// compressed = np.empty((compressed_len,), dtype=np.uint32)
+    /// coder.copy_compressed(compressed)
     ///
-    ///     # Optional: write the compressed data to a file in
-    ///     #           platform-independent byte ordering.
-    ///     if sys.byteorder == 'big':
-    ///         compressed.byteswap()
-    ///     with open('path/to/file', 'wb') as file:
-    ///         compressed.tofile(file)
+    /// # Optional: write the compressed data to a file in
+    /// #           platform-independent byte ordering.
+    /// if sys.byteorder == "big":
+    ///     compressed.byteswap()
+    /// with open("path/to/file", "wb") as file:
+    ///     compressed.tofile(file)
+    /// ```
     pub fn copy_compressed(&self, destination: &PyArray1<u32>) {
         assert_eq!(destination.len(), self.num_words());
 
@@ -128,15 +137,17 @@ impl Coder {
     /// The provided numpy arrays `symbols`, `means`, and `stds` must all have the
     /// same size.
     ///
+    /// See method `pop_gaussian_symbols` for a usage example.
+    ///
     /// Arguments:
     /// symbols -- the symbols to be encoded. Must be a contiguous one-dimensional
     ///     numpy array (call `.copy()` on it if it is not contiguous) with dtype
     ///     `int32`. Each value in the array must be no smaller than
     ///     `min_supported_symbol` and no larger than `max_supported_symbol`.
     /// min_supported_symbol -- lower bound of the domain for argument `symbols`
-    ///     (inclusively). Only relevant if `leaky` is `True`.
+    ///     (inclusively).
     /// max_supported_symbol -- upper bound of the domain for argument `symbols`
-    ///     (inclusively). Only relevant if `leaky` is `True`.
+    ///     (inclusively).
     /// means -- the mean values of the Gaussian entropy models for each symbol.
     ///     Must be a contiguous one-dimensional numpy array with dtype `float64`
     ///     and with the exact same length as the argument `symbols`.
@@ -184,52 +195,51 @@ impl Coder {
     /// models.
     ///
     /// The provided numpy arrays `means`, `stds`, and `symbols_out` must all have
-    /// the same size. The provided `means` and `stds` (and `min_supported_symbol`
-    /// and `max_supported_symbol` if `leaky` is `True`) must be the exact same
-    /// values that were used for encoding. Even a tiny modification of these
-    /// arguments can cause the coder to decode *completely* different symbols.
+    /// the same size. The provided `means`, `stds`, `min_supported_symbol`,
+    /// `max_supported_symbol`, and `leaky` must be the exact same values that were
+    /// used for encoding. Even a tiny modification of these arguments can cause the
+    /// coder to decode *completely* different symbols.
     ///
     /// The symbols will be popped off the stack and written to the target array in
     /// reverseorder so as to simplify usage, e.g.:
     ///
-    ///     coder = ans.Coder()
-    ///     symbols = np.array([2, 8, -5], dtype=np.int32)
-    ///     decoded = np.empty((3,), dtype=np.int32)
-    ///     means = np.array([0.1, 10.3, -3.2], dtype=np.float64)
-    ///     stds = np.array([3.2, 1.3, 1.9], dtype=np.float64)
+    /// ```python
+    /// coder = ans.Coder()
+    /// symbols = np.array([2, 8, -5], dtype=np.int32)
+    /// decoded = np.empty((3,), dtype=np.int32)
+    /// means = np.array([0.1, 10.3, -3.2], dtype=np.float64)
+    /// stds = np.array([3.2, 1.3, 1.9], dtype=np.float64)
     ///
-    ///     # Push symbols on the stack:
-    ///     coder.push_gaussian_symbols(symbols, -10, 10, means, stds, True)
+    /// # Push symbols on the stack:
+    /// coder.push_gaussian_symbols(symbols, -10, 10, means, stds, True)
     ///
-    ///     # Pop symbols off the stack in reverse order:
-    ///     coder.pop_gaussian_symbols(-10, 10, means, stds, decoded, True)
+    /// # Pop symbols off the stack in reverse order:
+    /// coder.pop_gaussian_symbols(-10, 10, means, stds, decoded, True)
     ///
-    ///     # Check that the decoded symbols match the encoded ones.
-    ///     assert np.all(symbols == decoded)
-    ///     assert coder.is_empty()
+    /// # Verify that the decoded symbols match the encoded ones.
+    /// assert np.all(symbols == decoded)
+    /// assert coder.is_empty()
+    /// ```
     ///
     /// Arguments:
-    /// min_supported_symbol -- lower bound of the domain for argument `symbols`
-    ///     (inclusively). Only relevant if `leaky` is `True`.
-    /// max_supported_symbol -- upper bound of the domain for argument `symbols`
-    ///     (inclusively). Only relevant if `leaky` is `True`.
+    /// min_supported_symbol -- lower bound of the domain supported by the entropy
+    ///     model (inclusively). Must be the same value that was used for encoding.
+    /// max_supported_symbol -- upper bound of the domain supported by the entropy
+    ///     model (inclusively). Must be the same value that was used for encoding.
     /// means -- the mean values of the Gaussian entropy models for each symbol.
     ///     Must be a contiguous one-dimensional numpy array with dtype `float64`
     ///     and with the exact same length as the argument `symbols_out`.
     /// stds -- the standard deviations of the Gaussian entropy models for each
     ///     symbol. Must be a contiguous one-dimensional numpy array with dtype
     ///     `float64` and with the exact same length as the argument `symbols_out`.
-    /// symbols -- the symbols to be encoded. Must be a contiguous one-dimensional
-    ///     numpy array (call `.copy()` on it if it is not contiguous) with dtype
-    ///     `int32`. Each value in the array must be no smaller than
-    ///     `min_supported_symbol` and no larger than `max_supported_symbol`.
+    /// symbols_out -- the target array to which decoded symbols will be written.
+    ///     Must be a contiguous one-dimensional numpy array (call `.copy()` on it
+    ///     if it is not contiguous) with dtype `int32`.
     /// leaky -- whether or not the entropy model should assign a nonzero
     ///     probability for all symbols in the range from `min_supported_symbol`
     ///     to `max_supported_symbol`, even if the nominal probability falls
     ///     below the smallest nonzero probability that can be resolved by the
-    ///     entropy coder. This is usually a good idea as it makes sure that all
-    ///     symbols within the supported domain can actually be encoded. When in
-    ///     doubt, set this to `True`.
+    ///     entropy coder. Must be the same value that was used for encoding.
     pub fn pop_gaussian_symbols(
         &mut self,
         min_supported_symbol: i32,
@@ -274,12 +284,15 @@ impl Coder {
     /// - the entropy model is a categorical rather than a Gaussian distribution.
     ///
     /// In detail, the categorical entropy model is constructed as follows:
-    /// - each symbol from `min_supported_symbol` to `max_supported_symbol` gets
-    ///   assigned at least the smallest nonzero probability that is representable
-    ///   within the internally used precision.
+    /// - each symbol from `min_supported_symbol` to `max_supported_symbol`
+    ///   (inclusively) gets assigned at least the smallest nonzero probability
+    ///   that is representable within the internally used precision.
     /// - the remaining probability mass is distributed among the symbols from
     ///   `min_provided_symbol` to `min_provided_symbol + len(probabilities) - 1`
-    ///   (inclusively), proportionally to the provided probabilities.
+    ///   (inclusively), in the proportions specified by the provided probabilities
+    ///   (as far as this is possible within the internally used fixed point
+    ///   accuracy). The provided probabilities do not need to be normalized (i.e.,
+    ///   the do not need to add up to one) but they must all be nonnegative.
     pub fn push_iid_categorical_symbols(
         &mut self,
         symbols: PyReadonlyArray1<i32>,
@@ -297,7 +310,7 @@ impl Coder {
         );
     }
 
-    /// Encodes a sequence of categorically distributed symbols *in reverse order*.
+    /// Decodes a sequence of categorically distributed symbols *in reverse order*.
     ///
     /// This method is analogous to the method `pop_gaussian_symbols` except that
     /// - all symbols are decoded with the same entropy model; and

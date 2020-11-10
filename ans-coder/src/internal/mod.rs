@@ -5,6 +5,9 @@ pub mod distributions;
 
 use distributions::{Categorical, DiscreteDistribution, Leakiness, Quantizer};
 
+/// Number of bits to represent probabilities in fixed point accuracy.
+///
+/// Must not be larger than 32.
 const FREQUENCY_BITS: usize = 24;
 
 #[pyclass]
@@ -233,7 +236,7 @@ impl AnsCoder {
 
 #[cfg(test)]
 mod tests {
-    use super::distributions::DiscreteDistribution;
+    use super::distributions::{DiscreteDistribution, LeakyQuantizer};
     use super::*;
 
     use rand_xoshiro::rand_core::{RngCore, SeedableRng};
@@ -304,10 +307,16 @@ mod tests {
         );
         dbg!(coder.num_bits(), AMT as f64 * categorical.entropy());
 
-        coder.push_gaussian_symbols(&symbols_gaussian, -127, 127, &means, &stds);
+        coder.push_gaussian_symbols::<distributions::Leaky>(
+            &symbols_gaussian,
+            -127,
+            127,
+            &means,
+            &stds,
+        );
 
         let reconstructed_gaussian = coder
-            .pop_gaussian_symbols(-127, 127, &means, &stds)
+            .pop_gaussian_symbols::<distributions::Leaky>(-127, 127, &means, &stds)
             .unwrap();
         let reconstructed_categorical = coder
             .pop_iid_categorical_symbols(AMT, -127, 127, -10, &categorical_probabilities)

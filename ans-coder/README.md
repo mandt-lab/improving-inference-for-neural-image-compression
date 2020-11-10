@@ -1,6 +1,6 @@
 # ANS Entropy Coder
 
-The code in directory implements a simple entropy coder based on [Asymmetric Numeral Systems](https://en.wikipedia.org/wiki/Asymmetric_numeral_systems) as a Python extension module.
+The code in this directory implements a simple entropy coder based on [Asymmetric Numeral Systems](https://en.wikipedia.org/wiki/Asymmetric_numeral_systems) as a Python extension module.
 
 ## Usage
 
@@ -83,5 +83,5 @@ Follow these steps to compile the module:
 ## Known Issues
 
 - The Python/Rust interface includes some copying that isn't strictly necessary but it makes the implementation a bit simpler.
-  At the moemnt, this is not an issue since entropy coding is not the computational bottleneck in current our use cases.
+  At the moment, this is not an issue since entropy coding is not the computational bottleneck in current our use cases.
 - It would also be nicer if, instead of passing an out-parameter to `copy_compressed`, the method could just instantiate a new numpy array, write to it, and then return it (passing ownership to Python's garbage collector).
