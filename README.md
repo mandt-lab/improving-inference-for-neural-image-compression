@@ -1,5 +1,7 @@
 # Improving Inference for Neural Image Compression
 
+![Example SGA optimization landscape](results/sga_landscape.png)
+
 This repository contains implementation of various methods considered in [Improving Inference for Neural Image Compression](https://arxiv.org/pdf/2006.04240.pdf),
 accepted at NeurIPS 2020:
 ```
