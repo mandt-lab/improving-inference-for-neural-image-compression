@@ -426,21 +426,21 @@ def encode_latents(args):
         z_mean_scaled = Z_DENSITY * z_mean_cur
         z_std_scaled = Z_DENSITY * np.exp(0.5 * z_logvar_cur)
         max_z_abs = (np.abs(z_mean_scaled) + 3.0 * z_std_scaled + 0.5).max()
-        encoder_z_range_index = min(z_grid_range_index, np.sum(Z_DENSITY * encoder_ranges_z < max_z_abs))
-        encoder_z_range = Z_DENSITY * encoder_ranges_z[encoder_z_range_index]
+        encoder_range_z_index = min(z_grid_range_index, np.sum(Z_DENSITY * encoder_ranges_z < max_z_abs))
+        encoder_range_z = Z_DENSITY * encoder_ranges_z[encoder_range_z_index]
 
         encoder_ranges_y = np.array([31, 63, 127, 255])
         max_y_abs = np.abs(y).max()
-        encoder_y_range_index = np.sum(encoder_ranges_y < max_y_abs)
-        if encoder_y_range_index == len(encoder_ranges_y):
+        encoder_range_index_y = np.sum(encoder_ranges_y < max_y_abs)
+        if encoder_range_index_y == len(encoder_ranges_y):
             raise "Values for y out of range."
-        encoder_y_range = encoder_ranges_y[encoder_y_range_index]
+        encoder_range_y = encoder_ranges_y[encoder_range_index_y]
 
         coder = Coder(side_information)
         batch_size, _, _, _ = z_mean_scaled.shape
         z = np.empty(z_mean_scaled.shape, dtype=np.int32)
         coder.pop_gaussian_symbols(
-            -encoder_z_range, encoder_z_range,
+            -encoder_range_z, encoder_range_z,
             z_mean_scaled.ravel().astype(np.float64),
             z_std_scaled.ravel().astype(np.float64),
             z.ravel(),
@@ -457,23 +457,23 @@ def encode_latents(args):
             })
 
         # Entropy coder cannot deal with infinite or zero standard deviations.
-        y_std = np.maximum(np.minimum(y_std, 16 * encoder_y_range), 1e-6)
+        y_std = np.maximum(np.minimum(y_std, 16 * encoder_range_y), 1e-6)
 
         coder.push_gaussian_symbols(
             y.ravel().astype(np.int32),
-            -encoder_y_range, encoder_y_range,
+            -encoder_range_y, encoder_range_y,
             y_mean.ravel().astype(np.float64),
             y_std.ravel().astype(np.float64),
             True)
         num_bits_after_pushing_y = coder.num_bits()
 
-        z_grid_cutoff_left = z_grid_range - encoder_z_range
+        z_grid_cutoff_left = z_grid_range - encoder_range_z
         z_grid_cutoff_right = 2 * z_grid_range + 1 - z_grid_cutoff_left
         _, num_filters = z_grid_likelihood.shape
         for i in range(num_filters):
             coder.push_iid_categorical_symbols(
                 z[..., i].flatten().astype(np.int32),
-                -encoder_z_range, encoder_z_range, -encoder_z_range,
+                -encoder_range_z, encoder_range_z, -encoder_range_z,
                 z_grid_likelihood[z_grid_cutoff_left:z_grid_cutoff_right, i].flatten().astype(np.float64))
         num_bits_after_pushing_z = coder.num_bits()
 
@@ -486,7 +486,7 @@ def encode_latents(args):
             batch_size, z_width, z_height, _ = z.shape
             assert batch_size != 0 and z_width != 0 and z_height != 0
 
-            batch_size = uint_to_bytes(batch_size)
+            batch_size_bytes = uint_to_bytes(batch_size)
             x_width = uint_to_bytes(width)
             x_height = uint_to_bytes(height)
             if len(x_width) > len(x_height):
@@ -494,30 +494,48 @@ def encode_latents(args):
             elif len(x_height) > len(x_width):
                 x_width = bytearray([0] * (len(x_height) - len(x_width)) + list(x_width))
             
-            # first byte: 2 bits each for length of batch size length, length of dimensions, encoder_z_range_index, encoder_y_range_index
-            first_byte = ((len(batch_size) - 1) << 6) | ((len(x_width) - 1) << 4) | (encoder_z_range_index << 2) | encoder_y_range_index
-            header = bytearray([first_byte] + list(batch_size) + list(x_width) + list(x_height))
+            # first byte: 2 bits each for length of batch size length, length of dimensions, encoder_range_z_index, encoder_range_index_y
+            first_byte = ((len(batch_size_bytes) - 1) << 6) | ((len(x_width) - 1) << 4) | (encoder_range_z_index << 2) | encoder_range_index_y
+            header = bytearray([first_byte] + list(batch_size_bytes) + list(x_width) + list(x_height))
 
             f.write(header)
             compressed.tofile(f)
 
+        total_pixels = batch_size * width * height
+        final_file_size = 8 * len(header) + num_bits_after_pushing_z
+        expected_net_file_size = np.sum(est_net_bits)
+        actual_net_file_size = final_file_size - side_information_bits
+
         print('Compressed data written to file %s' % output_file)
+        print()
+        print(
+            'Maximum absolute values of latent variables: %f (scaled hyperlatents z) and %d (latents y)'
+            % (max_z_abs, max_y_abs))
+        print(
+            'Encoder domains: %d to %d (scaled hyperlatents z) and %d to %d (latents y)'
+            % (-encoder_range_z, encoder_range_z, -encoder_range_y, encoder_range_y))
         print()
         print('Expected bit rates based on information content:')
         print('- expected bits back: %.2f bits' % np.sum(est_bits_back))
         print('- expected bits for encoding y|z: %.2f bits' % np.sum(est_y_bits))
         print('- expected bits for encoding z: %.2f bits' % np.sum(est_z_bits))
-        print('- expected net file size: %.2f bits' % np.sum(est_net_bits))
+        print(
+            '- expected net file size: %.2f bits (%g bits per pixel)'
+            % (expected_net_file_size, expected_net_file_size / total_pixels))
         print()
         print('Actual bit rates from entropy coder:')
-        print('- started with %d bits of random side information' % side_information_bits)
-        print('- actual bits back: %d bits' % (side_information_bits - num_bits_after_popping_z))
-        print('- actual bits for encoding y|z: %d bits' % (num_bits_after_pushing_y - num_bits_after_popping_z))
-        print('- actual bits for encoding z: %d bits' % (num_bits_after_pushing_z - num_bits_after_pushing_y))
-        print('- header size: %d bits' % (8 * len(header)))
+        print('- started with %d bits of random side information;' % side_information_bits)
+        print('- then consumed %d bits to decode z|y;' % (side_information_bits - num_bits_after_popping_z))
+        print('- then added %d bits to encode y|z;' % (num_bits_after_pushing_y - num_bits_after_popping_z))
+        print('- then added %d bits to encode z;' % (num_bits_after_pushing_z - num_bits_after_pushing_y))
+        print('- and prepended a header of size %d bits;' % (8 * len(header)))
+        print('- resulting in a file with %d bits.' % final_file_size)
         print(
-            '- actual net file size (including header): %d bits'
-            % (8 * len(header) + num_bits_after_pushing_z - side_information_bits))
+            '==> actual net file size (including header but excluding side information): %d bits (%g bits per pixel)'
+            % (actual_net_file_size, actual_net_file_size / total_pixels))
+        print(
+            '    (%g%% overhead over net information content)'
+            % (100 * (actual_net_file_size - expected_net_file_size) / expected_net_file_size))
 
     with tf.Session() as sess:
         # Load the latest model checkpoint.
@@ -561,12 +579,12 @@ def decode_latents(args):
 
     # Read file header and payload.
     with open(args.input_file, 'rb') as f:
-        # first byte: 2 bits each for length of batch size length, length of dimensions, encoder_z_range_index, encoder_y_range_index
+        # first byte: 2 bits each for length of batch size length, length of dimensions, encoder_range_z_index, encoder_range_index_y
         first_byte = f.read(1)[0]
         batch_size_len = (first_byte >> 6) + 1
         dimensions_len = ((first_byte >> 4) & 3) + 1
-        encoder_z_range_index = (first_byte >> 2) & 3
-        encoder_y_range_index = first_byte & 3
+        encoder_range_z_index = (first_byte >> 2) & 3
+        encoder_range_index_y = first_byte & 3
 
         batch_size = bytes_to_uint(f.read(batch_size_len))
         x_width = bytes_to_uint(f.read(dimensions_len))
@@ -581,10 +599,10 @@ def decode_latents(args):
     coder = ans.Coder(compressed)
 
     # Find range for entropy coding:
-    encoder_z_ranges = np.array([15, 31, 63, 127])
-    encoder_z_range = Z_DENSITY * encoder_z_ranges[encoder_z_range_index]
-    encoder_y_ranges = np.array([31, 63, 127, 255])
-    encoder_y_range = encoder_y_ranges[encoder_y_range_index]
+    encoder_ranges_z = np.array([15, 31, 63, 127])
+    encoder_range_z = Z_DENSITY * encoder_ranges_z[encoder_range_z_index]
+    encoder_ranges_y = np.array([31, 63, 127, 255])
+    encoder_range_y = encoder_ranges_y[encoder_range_index_y]
 
     # Instantiate the model.
     fake_X = np.zeros((batch_size, x_width, x_height, 3), dtype=np.float32)
@@ -593,10 +611,10 @@ def decode_latents(args):
 
     # Rasterize the hyperprior.
     z_grid = tf.tile(
-        tf.reshape(tf.range(-encoder_z_range, encoder_z_range + 1), (-1, 1, 1, 1)),
+        tf.reshape(tf.range(-encoder_range_z, encoder_range_z + 1), (-1, 1, 1, 1)),
         (1, 1, 1, args.num_filters))
     z_grid = (1.0 / Z_DENSITY) * tf.cast(z_grid, tf.float32)
-    z_grid_likelihood = tf.reshape(model.hyper_prior.pdf(z_grid), (2 * encoder_z_range + 1, args.num_filters))
+    z_grid_likelihood = tf.reshape(model.hyper_prior.pdf(z_grid), (2 * encoder_range_z + 1, args.num_filters))
     # (`z_grid_likelihood` is normalized to Z_DENSITY rather than one but that shouldn't make a
     # difference since the coder doesn't require it to be normalized.)
 
@@ -612,7 +630,7 @@ def decode_latents(args):
         z = np.empty((args.num_filters, batch_size, z_width, z_height), dtype=np.int32)
         for i in reversed(range(args.num_filters)):
             coder.pop_iid_categorical_symbols(
-                -encoder_z_range, encoder_z_range, -encoder_z_range,
+                -encoder_range_z, encoder_range_z, -encoder_range_z,
                 z_grid_likelihood[:, i].flatten().astype(np.float64),
                 z[i, ...].ravel())
         z = z.transpose((1, 2, 3, 0))
@@ -627,17 +645,15 @@ def decode_latents(args):
             })
 
         # Entropy coder cannot deal with infinite or zero standard deviations.
-        y_std = np.maximum(np.minimum(y_std, 16 * encoder_y_range), 1e-6)
+        y_std = np.maximum(np.minimum(y_std, 16 * encoder_range_y), 1e-6)
 
         y = np.empty(y_mean.shape, dtype=np.int32)
         coder.pop_gaussian_symbols(
-            -encoder_y_range, encoder_y_range,
+            -encoder_range_y, encoder_range_y,
             y_mean.ravel().astype(np.float64),
             y_std.ravel().astype(np.float64),
             y.ravel(),
             True)
-        compressed = np.empty((coder.num_words(),), dtype=np.uint32)
-        coder.copy_compressed(compressed)
 
         # Write reconstructed y.
         output_file = args.output_file
@@ -679,7 +695,7 @@ def decode_latents(args):
     # Get back side information.
     coder.push_gaussian_symbols(
         z.ravel(),
-        -encoder_z_range, encoder_z_range,
+        -encoder_range_z, encoder_range_z,
         (Z_DENSITY * z_mean_cur).ravel().astype(np.float64),
         (Z_DENSITY * np.exp(0.5 * z_logvar_cur)).ravel().astype(np.float64),
         True)
