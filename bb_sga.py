@@ -159,7 +159,7 @@ class Model:
         else:
             self.rd_loss = self.train_bpp
         self.rd_gradients = tf.gradients(self.rd_loss, [self.y, self.z_mean, self.z_logvar])
-        self.r_gradients = tf.gradients(self.net_z_bpp, [self.z_mean, self.z_logvar])
+        self.r_gradients = tf.gradients(self.train_bpp, [self.z_mean, self.z_logvar])
 
         x *= 255
         x_tilde = tf.clip_by_value(x_tilde, 0, 1)
@@ -271,7 +271,7 @@ def compress(args):
 
                 adam_optimizer = Adam(lr=r_lr)
                 for it in range(r_opt_its):
-                    grads, obj = sess.run([model.r_gradients, model.net_z_bpp],
+                    grads, obj = sess.run([model.r_gradients, model.train_bpp],
                                           feed_dict={model.z_mean: z_mean_cur, model.z_logvar: z_logvar_cur, **rate_feed_dict})
                     z_mean_cur, z_logvar_cur = adam_optimizer.update([z_mean_cur, z_logvar_cur], grads)
                     if it % log_itv == 0 or it + 1 == r_opt_its:
@@ -411,7 +411,7 @@ def encode_latents(args):
         from adam import Adam
         adam_optimizer = Adam(lr=r_lr)
         for it in range(r_opt_its):
-            grads, obj = sess.run([model.r_gradients, model.net_z_bpp],
+            grads, obj = sess.run([model.r_gradients, model.train_bpp],
                                     feed_dict={model.z_mean: z_mean_cur, model.z_logvar: z_logvar_cur, **rate_feed_dict})
             z_mean_cur, z_logvar_cur = adam_optimizer.update([z_mean_cur, z_logvar_cur], grads)
             if it % 100 == 0 or it + 1 == r_opt_its:
@@ -667,7 +667,7 @@ def decode_latents(args):
                 from adam import Adam
                 adam_optimizer = Adam(lr=r_lr)
                 for it in range(r_opt_its):
-                    grads, obj = sess.run([model.r_gradients, model.net_z_bpp],
+                    grads, obj = sess.run([model.r_gradients, model.train_bpp],
                                             feed_dict={model.z_mean: z_mean_cur, model.z_logvar: z_logvar_cur, **rate_feed_dict})
                     z_mean_cur, z_logvar_cur = adam_optimizer.update([z_mean_cur, z_logvar_cur], grads)
                     if it % 100 == 0 or it + 1 == r_opt_its:
