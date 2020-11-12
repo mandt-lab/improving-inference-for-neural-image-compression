@@ -15,7 +15,7 @@ from tensorflow_compression.python.ops import math_ops
 seed = 0
 np.random.seed(seed)
 tf.set_random_seed(seed)
-Z_DENSITY = 1 << 4  # Should probably be a power of 2 to avoid rounding errors.
+Z_DENSITY = 1 << 2  # Should probably be a power of 2 to avoid rounding errors.
 
 import tensorflow_compression as tfc
 from nn_models import AnalysisTransform, SynthesisTransform, HyperAnalysisTransform
@@ -368,7 +368,7 @@ def encode_latents(args):
     side_information_bits = 32 * len(side_information) - 1
 
     # Find maximum range for grid in z-space:
-    encoder_ranges_z = np.array([15, 31, 63, 127])
+    encoder_ranges_z = np.array([7, 15, 31, 63])
     max_z_abs = (np.abs(z_mean) + 3.0 * z_std + 0.5).max()
     z_grid_range_index = min(len(encoder_ranges_z) -1, np.sum(Z_DENSITY * encoder_ranges_z < max_z_abs))
     z_grid_range = Z_DENSITY * encoder_ranges_z[z_grid_range_index]
@@ -599,7 +599,7 @@ def decode_latents(args):
     coder = ans.Coder(compressed)
 
     # Find range for entropy coding:
-    encoder_ranges_z = np.array([15, 31, 63, 127])
+    encoder_ranges_z = np.array([7, 15, 31, 63])
     encoder_range_z = Z_DENSITY * encoder_ranges_z[encoder_range_z_index]
     encoder_ranges_y = np.array([31, 63, 127, 255])
     encoder_range_y = encoder_ranges_y[encoder_range_index_y]
