@@ -13,6 +13,12 @@ accepted at NeurIPS 2020:
 }
 ```
 
+
+## Update
+#### 03/15/2023
+See a cleaner and more reusable implementation of SGA in tensorflow 2.10 in the [tf2 branch](https://github.com/mandt-lab/improving-inference-for-neural-image-compression/tree/tf2).
+
+
 ## Overview
 We propose various methods to improve the compression performance of a popular and competitive neural image compression baseline model
 (mean-scale hyperprior model proposed by [Minnen et al., 2018](https://arxiv.org/abs/1809.02736)), *at inference/compression time*,
