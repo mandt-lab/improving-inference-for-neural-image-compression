@@ -123,14 +123,13 @@ def get_args_as_obj(args):
     return args
 
 
-def config_dict_to_str(args_dict, record_keys=tuple(), leave_out_falsy=True, prefix=None, use_abbr=True,
+def config_dict_to_str(args_dict, record_keys=tuple(), leave_out_falsy=True, prefix=None,
                        primary_delimiter='-', secondary_delimiter='_'):
     """
     Given a dictionary of cmdline arguments, return a string that identifies the training run.
     :param args_dict:
     :param record_keys: a tuple/list of keys that is a subset of keys in args_dict that will be used to form the runname
     :param leave_out_falsy: whether to skip keys whose values evaluate to falsy (0, None, False, etc.)
-    :param use_abbr: whether to use abbreviations for long key name
     :param primary_delimiter: the char to delimit different key-value paris
     :param secondary_delimiter: the delimiter within each key or value string (e.g., when the value is a list of numbers)
     :return:
@@ -145,9 +144,6 @@ def config_dict_to_str(args_dict, record_keys=tuple(), leave_out_falsy=True, pre
             val_str = secondary_delimiter.join(map(str, val))
         else:
             val_str = str(val)
-        if use_abbr:
-            from configs import cmdline_arg_abbr
-            key = cmdline_arg_abbr.get(key, key)
         kv_strs.append('%s=%s' % (key, val_str))
 
     if prefix:

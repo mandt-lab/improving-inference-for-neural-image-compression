@@ -70,23 +70,19 @@ def get_sga_schedule(r, ub, lb=1e-8, scheme='exp', t0=200.0):
   Returns:
     callable t -> tau(t)
   """
-  backend = tf
 
   def schedule(t):
     # :param t: step/iteration number
     t = tf.cast(t, tf.float32)  # step variable is usually tf.int64
     if scheme == 'exp':
-      tau = ub * backend.exp(-r * (t - t0))
+      tau = ub * tf.exp(-r * (t - t0))
     elif scheme == 'linear':
       # Cool temperature linearly from ub after the initial t0 iterations
       tau = -r * (t - t0) + ub
     else:
       raise NotImplementedError
 
-    if backend is None:
-      return min(max(tau, lb), ub)
-    else:
-      return backend.minimum(backend.maximum(tau, lb), ub)
+    return tf.minimum(tf.maximum(tau, lb), ub)
 
   return schedule
 

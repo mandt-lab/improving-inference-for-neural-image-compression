@@ -146,7 +146,7 @@ def parse_args(argv, add_model_specific_args=None):
     for cmd, mode in zip((train_cmd, eval_cmd), ('training', 'evaluation')):
         cmd.add_argument(
             "--dataset", default=None,
-            help=f"Name of dataset for {mode}; accepts a GAN class, a glob key defined in configs.dataset_to_globs"
+            help=f"Name of dataset for {mode}; this can be a glob key defined in configs.dataset_to_globs"
                  f"(use --data_glob to provide custom glob string instead), or a path to a numpy data array.")
         cmd.add_argument(
             "--data_glob", type=str, default=None,
@@ -183,20 +183,7 @@ def train(args, create_model, get_runname):
 
     from utils import get_custom_dataset
     if args.dataset is not None:
-        import configs
-        if args.dataset in configs.biggan_class_names_to_ids:  # train on GAN
-            import biggan
-            # scale from [-1, 1] to [0, 255] to conform to img compression models
-            post_process_fun = lambda x: (x + 1.) * 127.5
-            sampler = biggan.get_sampler(args.dataset, args.data_dim, post_process_fun=post_process_fun)
-
-            def gen():
-                while True:
-                    yield sampler(args.batchsize)
-
-            train_data_generator = gen()
-            train_dataset = None
-        elif args.dataset in configs.dataset_to_globs.keys():
+        if args.dataset in configs.dataset_to_globs.keys():
             file_glob = configs.dataset_to_globs[args.dataset]
             train_dataset = get_custom_dataset("train", file_glob, args)
             validation_dataset = get_custom_dataset("validation", file_glob, args)
@@ -310,31 +297,23 @@ def evaluate(args, create_model, get_runname):
         model.set_entropy_model()
 
     max_pxl_val = 255.
-    if args.dataset in configs.biggan_class_names_to_ids:
-        import biggan
-        # scale from [-1, 1] to [0, 255] to conform to img compression models
-        post_process_fun = lambda x: (x + 1.) * 127.5
-        sampler = biggan.get_sampler(args.dataset, args.data_dim, post_process_fun=post_process_fun)
-        dataset = [sampler(args.batchsize)]  # just eval a single batch of images
-        pad_img = False
-    else:  # custom imgs
-        pad_img = True
-        args.batchsize = 1
-        if args.data_glob:
-            file_glob = args.data_glob
-            args.dataset = 'custom_glob'
-        else:
-            assert args.dataset in configs.dataset_to_globs.keys()
-            file_glob = configs.dataset_to_globs[args.dataset]
-        dataset = get_custom_dataset("eval", file_glob, args)  # load eval dataset in special 'eval' mode
+    pad_img = True
+    args.batchsize = 1
+    if args.data_glob:
+        file_glob = args.data_glob
+        args.dataset = 'custom_glob'
+    else:
+        assert args.dataset in configs.dataset_to_globs.keys()
+        file_glob = configs.dataset_to_globs[args.dataset]
+    dataset = get_custom_dataset("eval", file_glob, args)  # load eval dataset in special 'eval' mode
 
-        if hasattr(model, 'cum_downsample_factors'):
-            cum_downsample_factor = model.cum_downsample_factor
-        elif hasattr(model, 'downsample_factors'):
-            cum_downsample_factor = np.prod(model.downsample_factors)
-        else:
-            cum_downsample_factor = args.cum_downsample_factor
-        print(f'Using cum_downsample_factor = {cum_downsample_factor}')
+    if hasattr(model, 'cum_downsample_factors'):
+        cum_downsample_factor = model.cum_downsample_factor
+    elif hasattr(model, 'downsample_factors'):
+        cum_downsample_factor = np.prod(model.downsample_factors)
+    else:
+        cum_downsample_factor = args.cum_downsample_factor
+    print(f'Using cum_downsample_factor = {cum_downsample_factor}')
 
     from utils import maybe_pad_img
 

@@ -34,8 +34,11 @@ import sys
 import numpy as np
 import tensorflow as tf
 import tensorflow_compression as tfc
-from absl import app
+from absl import app, logging
 from utils import reshape_spatially_as
+from sga import sga_round
+
+CODING_RANK = 3
 
 
 class AnalysisTransform(tf.keras.Sequential):
@@ -147,28 +150,76 @@ class MBT2018Model(tf.keras.Model):
         self.hyperprior = tfc.NoisyDeepFactorized(batch_shape=(num_filters,))
         self.build((None, None, None, 3))
 
+        self.metric_names = ('loss', 'bpp', 'psnr')
+        self.my_metrics = [tf.keras.metrics.Mean(name=name) for name in self.metric_names]  # can't use self.metrics
+
     @classmethod
     def create_model(cls, args):
         return cls(args.lmbda, args.num_filters, args.num_scales, args.scale_min, args.scale_max)
 
-    def call(self, x, training):
-        """Computes rate and distortion losses."""
+    @staticmethod
+    def add_model_specific_args(parser):
+        parser.add_argument(
+            "--lambda", type=float, default=0.01, dest="lmbda",
+            help="Lambda for rate-distortion tradeoff.")
+        parser.add_argument(
+            "--num_filters", type=int, default=192,
+            help="Number of filters per layer.")
+        parser.add_argument(
+            "--num_scales", type=int, default=64,
+            help="Number of Gaussian scales to prepare range coding tables for.")
+        parser.add_argument(
+            "--scale_min", type=float, default=.11,
+            help="Minimum value of standard deviation of Gaussians.")
+        parser.add_argument(
+            "--scale_max", type=float, default=256.,
+            help="Maximum value of standard deviation of Gaussians.")
+
+    def call(self, x, training, y=None, z=None, sga=False, tau=None):
+        """
+        Run an image batch through the encoding and decoding paths of the model, and compute the R-D loss etc.
+        :param x:
+        :param training: use True to allow backprop; set to False to use hard quantization for eval.
+        :param y: variational parameter of q(y|x); if not provided, will compute it with amortized inference.
+        :param z: variational parameter of q(z|x); if not provided, will compute it with amortized inference.
+        :param sga: whether to use Gumbel (SGA) noise instead of default uniform noise. No effect if not training.
+        :param tau: SGA temperature.
+        :return:
+        """
         entropy_model = tfc.LocationScaleIndexedEntropyModel(
             tfc.NoisyNormal, self.num_scales, self.scale_fn, coding_rank=3,
-            compression=False)
+            compression=False)  # Note: offset_heuristic should be set to False if using SGA for modeling training.
         side_entropy_model = tfc.ContinuousBatchedEntropyModel(
             self.hyperprior, coding_rank=3, compression=False)
 
-        y = self.analysis_transform(x)
-        z = self.hyper_analysis_transform(y)  # no need for abs(y) as in bmshj2018.py
-        z_hat, z_bits = side_entropy_model(z, training=training)
+        if y is None:
+            y = self.analysis_transform(x)
+        if z is None:
+            z = self.hyper_analysis_transform(y)  # no need for abs(y) as in bmshj2018.py
+        reduce_axes = tuple(range(-CODING_RANK, 0))
+        if sga and training:
+            z_hat = sga_round(z, tau=tau, offset=side_entropy_model.quantization_offset)
+            z_bits = tf.reduce_sum(side_entropy_model.prior.log_prob(z_hat), reduce_axes) / (
+                -tf.math.log(tf.constant(2, dtype=self.hyperprior.dtype)))
+        else:  # Use uniform noise or hard quantization.
+            z_hat, z_bits = side_entropy_model(z, training=training)
+
+        # print(z.shape, z_hat.shape)
         mu, sigma = tf.split(self.hyper_synthesis_transform(z_hat), num_or_size_splits=2, axis=-1)
         if not training:
             mu = reshape_spatially_as(mu, y)
             sigma = reshape_spatially_as(sigma, y)
         sigma = tf.exp(sigma)  # make positive; will be clipped then quantized to scale_table anyway
         loc, indexes = mu, sigma
-        y_hat, y_bits = entropy_model(y, indexes, loc=loc, training=training)
+        if sga and training:
+            y_hat = sga_round(y, tau=tau, offset=loc)
+            py_centered = entropy_model._make_prior(entropy_model._normalize_indexes(indexes))  # loc=0 py
+            # Important: need to center the latent_sample before evaluating it under py_centered.
+            y_bits = tf.reduce_sum(py_centered.log_prob(y_hat - loc), reduce_axes) / (
+                -tf.math.log(tf.constant(2, dtype=self.hyperprior.dtype)))
+        else:
+            y_hat, y_bits = entropy_model(y, indexes, loc=loc, training=training)
+
         x_hat = self.synthesis_transform(y_hat)
         if not training:
             x_hat = reshape_spatially_as(x_hat, x)
@@ -216,8 +267,6 @@ class MBT2018Model(tf.keras.Model):
             weighted_metrics=None,
             **kwargs,
         )
-        self.metric_names = ('loss', 'bpp', 'psnr')
-        self.my_metrics = [tf.keras.metrics.Mean(name=name) for name in self.metric_names]  # can't use self.metrics
 
     def fit(self, *args, **kwargs):
         retval = super().fit(*args, **kwargs)
@@ -231,6 +280,53 @@ class MBT2018Model(tf.keras.Model):
             compression=True)
         self.side_entropy_model = tfc.ContinuousBatchedEntropyModel(
             self.hyperprior, coding_rank=3, compression=True)
+
+    def iterative_inference_step(self, x, y, z, tau, optimizer):
+        with tf.GradientTape() as tape:
+            res = self(x, training=True, y=y, z=z, sga=True, tau=tau)
+        variables = [y, z]
+        loss = res['loss']
+        gradients = tape.gradient(loss, variables)
+        optimizer.apply_gradients(zip(gradients, variables))
+        return res
+
+    def iterative_infer(self, x, num_steps, sga_schedule, learning_rate=5e-4,
+            log_every_steps=100, debug=False):
+        """
+        Perform iterative inference/encoding with SGA on a given image batch.
+        :param x:
+        :param num_steps:
+        :param sga_schedule:
+        :param learning_rate:
+        :param log_every_steps:
+        :param debug: if True, will run in eager mode.
+        :return:
+        """
+        # Initialize latent params with amortized inference.
+        y = self.analysis_transform(x)
+        z = self.hyper_analysis_transform(y)
+        y = tf.Variable(y, trainable=True)
+        z = tf.Variable(z, trainable=True)
+
+        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+        def step_fn(x, tau):
+            return self.iterative_inference_step(x, y, z, tau, optimizer)
+        if not debug:
+            step_fn = tf.function(step_fn)
+
+        for step in range(num_steps):
+            tau = sga_schedule(step)
+            step_res = step_fn(x, tau)
+            if step % log_every_steps == 0 or step + 1 == num_steps:
+                val_res = self(x, training=False, y=y, z=z)
+                # logging.info(
+                print(
+                    f"step={step}, T={tau:.3f} Train: loss={step_res['loss']:.4f} mse={step_res['mse']:.3f} bpp={step_res['bpp']:.4f} psnr={step_res['psnr']:.4f}"
+                    f"\t Val: loss={val_res['loss']:.4f} mse={val_res['mse']:.3f} bpp={val_res['bpp']:.4f} psnr={val_res['psnr']:.4f}")
+
+        # Final eval after done with gradient steps.
+        val_res = self(x, training=False, y=y, z=z)
+        return (y, z), val_res
 
     @tf.function(input_signature=[
         tf.TensorSpec(shape=(None, None, 3), dtype=tf.uint8),
