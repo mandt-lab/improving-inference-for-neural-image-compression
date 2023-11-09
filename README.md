@@ -14,9 +14,12 @@ accepted at NeurIPS 2020:
 ```
 
 
-## Update
+## Updates
 #### 03/15/2023
 See a cleaner and more reusable implementation of SGA in tensorflow 2.10 in the [tf2 branch](https://github.com/mandt-lab/improving-inference-for-neural-image-compression/tree/tf2).
+
+#### 11/02/2023
+Please see the [shallow NTC repo](https://github.com/mandt-lab/shallow-ntc/) for the best and most up-to-date implementation of SGA and training/evaluation pipeline for neural image compression in tf2.
 
 
 ## Overview
